@@ -1,67 +1,74 @@
-# Mongoify Composer Package
+# BetterStack Telemetry for AWS CloudWatch
 
-## Overview
+A lightweight, zero-dependency PHP library designed to forward **AWS CloudWatch Logs** directly to **BetterStack Telemetry (Logtail)**.
 
-Mongoify is a simplistic PHP package designed to seamlessly integrate between Shopify's webhook system and MongoDB. It
-serves as a bridge, facilitating real-time synchronization of Shopify events with a MongoDB database. This package is
-particularly useful for developers looking to build integrations on top of Shopify's platform.
-
-## Features
-
-- **Shopify Webhook Verification**: Validates incoming Shopify webhook requests.
-- **Data Processing**: Transforms and prepares webhook data for database operations (BSON Dates).
-- **MongoDB Integration**: Supports create, update, and delete operations based on webhook events.
+This package handles the specific format of AWS Lambda log subscription filters:
+1.  **Decodes** Base64 payload.
+2.  **Decompresses** Gzip data.
+3.  **Parses** JSON log events.
+4.  **Filters** standard Lambda noise (start/end requests).
+5.  **Ships** structured logs to BetterStack.
 
 ## Requirements
 
-To effectively use Mongoify, ensure the following requirements are met:
-
-- **PHP Version**: PHP 7.0 or higher.
-- **MongoDB PHP Driver**: The MongoDB PHP Driver must be installed in your PHP environment.
-- **MongoDB Server**: Access to a MongoDB server, either locally or hosted remotely.
-- **Web Server**: A web server to deploy your PHP application. This server will act as the endpoint for Shopify
-  webhooks, allowing Mongoify to receive and process data.
-- **Shopify Account with Webhooks**: An active Shopify account with configured webhooks.
+* PHP 8.3+
+* `ext-json`
+* `ext-zlib`
+* `php-curl-class/php-curl-class`
 
 ## Installation
 
-Install Mongoify using Composer:
+Install the package via Composer:
 
 ```bash
-composer require maltertech/mongoify
+composer require maltertech/betterstack-telemetry
 ```
 
 ## Usage
 
-### Initialization
+This library is designed to be used inside an AWS Lambda function (or any PHP application receiving raw CloudWatch log streams).
 
-Create an instance of the Mongoify class:
+### 1. Initialization
+
+Initialize the forwarder with your BetterStack credentials. Ideally, do this in your application's Service Provider or Dependency Injection container.
 
 ```php
-require __DIR__ . '/vendor/autoload.php';
+use MalterTech\BetterStack\CloudWatchForwarder;
 
-use Mongoify\Mongoify;
-
-$mongoify = new Mongoify(
-    'your-shopify-client-secret',
-    new MongoDB\Client('your-mongodb-connection-string'),
-    'your-database-name'
+$logger = new CloudWatchForwarder(
+    sourceToken:  'BETTERSTACK_TOKEN',      // Your Source Token from BetterStack
+    ingestionUrl: 'https://in.logs.betterstack.com', // The Ingestion URL
+    sourceName:   'Client-API-01'                    // Identifier for this logs source
 );
 ```
 
-### Methods
+### 2. Processing Events
 
-Mongoify provides several methods for accessing data:
+Pass the raw AWS event payload to the `push` method. The library will automatically detect if the payload contains compressed `awslogs` data and process it.
 
-- `getTopic()`: Returns the Shopify topic header.
-- `getCollection()`: Returns the collection name.
-- `getAction()`: Returns the Shopify action header.
-- `getWebhook()`: Returns the webhook data.
+```php
+// Inside your Lambda Handler or Controller
+public function handle(array $event)
+{
+    // ... your application logic ...
 
-## Error Handling
+    // Forward logs to BetterStack
+    $logger->push($event);
+}
+```
 
-Mongoify throws `ErrorException` for any processing issues.
+## How it Works
 
-## Support
+When AWS CloudWatch streams logs to a Lambda function, it sends them in a compressed format:
+`{ "awslogs": { "data": "H4sIAAAAAAAA/..." } }`
 
-For support, queries, or contributions, refer to the issue tracker on the repository or contact the package maintainers.
+The `CloudWatchForwarder` performs the following steps:
+1.  **Extraction:** target the `['awslogs']['data']` key.
+2.  **Decompression:** `base64_decode` -> `gzdecode`.
+3.  **Parsing:** Iterates through `logEvents`.
+4.  **Cleaning:** Skips strictly internal Lambda messages (like `RequestId: ...`) to save quota.
+5.  **Formatting:** Checks if the log message itself is JSON (e.g., from API Gateway) and parses it into a structured object; otherwise, treats it as a string.
+
+## License
+
+The MIT License (MIT). Please see [LICENSE](LICENSE) for more information.
